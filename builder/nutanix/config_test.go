@@ -89,3 +89,28 @@ func TestPrepareErrorsWhenNoAuth(t *testing.T) {
 		t.Errorf("expected authentication error, got: %v", err)
 	}
 }
+
+func TestPrepareRejectsInvalidWindowsInstallType(t *testing.T) {
+	c := &Config{}
+	_, err := c.Prepare(minimalValidConfig(map[string]interface{}{
+		"nutanix_username":     "admin",
+		"nutanix_password":     "password",
+		"windows_install_type": "fresh",
+	}))
+	if err != nil {
+		t.Fatalf("expected case-insensitive match to succeed, got: %v", err)
+	}
+
+	c2 := &Config{}
+	_, err = c2.Prepare(minimalValidConfig(map[string]interface{}{
+		"nutanix_username":     "admin",
+		"nutanix_password":     "password",
+		"windows_install_type": "INVALID",
+	}))
+	if err == nil {
+		t.Fatal("expected Prepare to fail with invalid windows_install_type")
+	}
+	if !strings.Contains(err.Error(), "windows_install_type must be FRESH or PREPARED") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
