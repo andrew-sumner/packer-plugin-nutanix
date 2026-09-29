@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/bootcommand"
@@ -131,6 +132,7 @@ type VmConfig struct {
 	Core                   int64      `mapstructure:"core" json:"core" required:"false"`
 	MemoryMB               int64      `mapstructure:"memory_mb" json:"memory_mb" required:"false"`
 	UserData               string     `mapstructure:"user_data" json:"user_data" required:"false"`
+	WindowsInstallType     string     `mapstructure:"windows_install_type" json:"windows_install_type" required:"false"`
 	VMCategories           []Category `mapstructure:"vm_categories" required:"false"`
 	Project                string     `mapstructure:"project" required:"false"`
 	GPU                    []GPU      `mapstructure:"gpu" required:"false"`
@@ -332,6 +334,18 @@ func (c *Config) Prepare(raws ...interface{}) ([]string, error) {
 	}
 	if hasAPIKey && !hasBasicAuth && usesObjectsLite {
 		errs = packersdk.MultiErrorAppend(errs, fmt.Errorf("nutanix_username and nutanix_password are required with nutanix_api_key when uploading images (source_image_path, cd_files or cd_content): Objects Lite signs uploads with them"))
+	}
+
+	switch strings.ToUpper(c.VmConfig.WindowsInstallType) {
+	case "", "PREPARED", "FRESH":
+		// ok
+	default:
+		errs = packersdk.MultiErrorAppend(errs,
+			fmt.Errorf("windows_install_type must be FRESH or PREPARED, got %q", c.VmConfig.WindowsInstallType))
+	}
+	// The install type is only sent with Windows Sysprep guest customization.
+	if c.VmConfig.WindowsInstallType != "" && (c.VmConfig.OSType != "Windows" || c.VmConfig.UserData == "") {
+		warnings = append(warnings, `windows_install_type has no effect unless os_type is "Windows" and user_data is set`)
 	}
 
 	if c.VmConfig.VMName == "" {
