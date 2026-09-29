@@ -65,16 +65,25 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			cmd := &packersdk.RemoteCmd{Command: s.Command}
 			if err := cmd.RunWithUi(ctx, comm, ui); err != nil {
 				if ctx.Err() != nil {
+					err := fmt.Errorf("build cancelled while running shutdown command: %w", err)
+					state.Put("error", err)
+					ui.Error(err.Error())
+					return multistep.ActionHalt
+				}
+				// WinRM runs the command synchronously, so a connection dropped
+				// by the shutdown itself is reported as an error that cannot be
+				// told apart from a command that never ran: wait for the VM to
+				// stop, and report this error if it does not. Other
+				// communicators (SSH) report a dropped connection as an exit
+				// status, so an error there means the command never ran.
+				if config.Comm.Type != "winrm" {
 					err := fmt.Errorf("failed to send shutdown command: %s", err)
 					state.Put("error", err)
 					ui.Error(err.Error())
 					return multistep.ActionHalt
 				}
-				// The communicator cannot tell a connection dropped by the
-				// shutdown from a command that never ran, so wait for the VM
-				// to stop and report this error if it does not.
 				commandErr = err
-				ui.Say(fmt.Sprintf("Shutdown command returned an error, waiting to see if the VM stops anyway: %s", err))
+				ui.Error(fmt.Sprintf("Shutdown command returned an error, waiting to see if the VM stops anyway: %s", err))
 			}
 
 		} else {

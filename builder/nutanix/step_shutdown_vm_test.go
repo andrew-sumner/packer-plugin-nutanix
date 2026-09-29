@@ -32,6 +32,7 @@ func (d *cancelledGetVMDriver) GetVM(ctx context.Context, vmUUID string) (*nutan
 type powerDriver struct {
 	Driver
 	powerOffErr error
+	getVMErr    error
 	powerState  string
 }
 
@@ -40,6 +41,9 @@ func (d *powerDriver) PowerOff(ctx context.Context, vmUUID string) error {
 }
 
 func (d *powerDriver) GetVM(ctx context.Context, vmUUID string) (*nutanixInstance, error) {
+	if d.getVMErr != nil {
+		return nil, d.getVMErr
+	}
 	ps := vmmModels.POWERSTATE_ON
 	if d.powerState == "OFF" {
 		ps = vmmModels.POWERSTATE_OFF
@@ -80,12 +84,15 @@ func TestStepShutdownResilience(t *testing.T) {
 		wantErrMsg string
 	}{
 		{"command error, VM stops", "shutdown", "winrm", &powerDriver{powerState: "OFF"}, false, multistep.ActionContinue, ""},
-		{"command error, build cancelled", "shutdown", "winrm", &powerDriver{powerState: "ON"}, true, multistep.ActionHalt, "failed to send shutdown command"},
+		{"command error, build cancelled", "shutdown", "winrm", &powerDriver{powerState: "ON"}, true, multistep.ActionHalt, "build cancelled while running shutdown command"},
+		{"ssh command error halts at once", "shutdown", "ssh", &powerDriver{powerState: "OFF"}, false, multistep.ActionHalt, "failed to send shutdown command: connection reset by peer"},
 		{"command error, VM never stops", "shutdown", "winrm", &powerDriver{powerState: "ON"}, false, multistep.ActionHalt, "the shutdown command failed: connection reset by peer"},
 		{"PowerOff error, VM already off", "", "winrm", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "OFF"}, false, multistep.ActionContinue, ""},
 		{"PowerOff error, VM still on", "", "winrm", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "ON"}, false, multistep.ActionHalt, "error stopping VM: task failed"},
 		{"no communicator, PowerOff error, VM already off", "", "none", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "OFF"}, false, multistep.ActionContinue, ""},
 		{"no communicator, PowerOff error, VM still on", "", "none", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "ON"}, false, multistep.ActionHalt, "error stopping VM: task failed"},
+		{"PowerOff and GetVM errors", "", "winrm", &powerDriver{powerOffErr: errors.New("task failed"), getVMErr: errors.New("401")}, false, multistep.ActionHalt, "error stopping VM: task failed"},
+		{"no communicator, PowerOff and GetVM errors", "", "none", &powerDriver{powerOffErr: errors.New("task failed"), getVMErr: errors.New("401")}, false, multistep.ActionHalt, "error stopping VM: task failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
