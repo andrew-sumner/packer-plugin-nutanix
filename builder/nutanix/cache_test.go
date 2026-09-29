@@ -260,3 +260,24 @@ func TestV4CacheParamsKeyDifferentiates(t *testing.T) {
 		t.Error("expected stable cache key for identical params")
 	}
 }
+
+// TestV4ClientCacheSeparatesCredentials guards that credentials, which are not
+// part of Key(), still never share a cached client: the cache's validation hash
+// of ManagementEndpoint must replace the client when they change.
+func TestV4ClientCacheSeparatesCredentials(t *testing.T) {
+	a := &v4CacheParams{endpoint: "cred-test.example.com", port: 9440, username: "user-a", password: "p"}
+	b := &v4CacheParams{endpoint: "cred-test.example.com", port: 9440, username: "user-b", password: "p"}
+	if a.Key() != b.Key() {
+		t.Fatal("test expects the two params to share a cache key")
+	}
+
+	for i, p := range []*v4CacheParams{a, b, a} {
+		c, err := v4SDKClientCache.GetOrCreate(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.VmApiInstance.ApiClient.Username; got != p.username {
+			t.Errorf("call %d: cached client has username %q, want %q", i, got, p.username)
+		}
+	}
+}

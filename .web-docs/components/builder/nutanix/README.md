@@ -48,7 +48,7 @@ export PKR_VAR_nutanix_custom_headers='{"Cf-Access-Client-Id":"your-client-id","
   - `nutanix_custom_headers` (map of strings) - Additional HTTP headers attached to requests to Prism Central: v4 REST API calls, VNC console websocket connections (used by `boot_command`), and Objects Lite S3 image uploads (used by `source_image_path`, `cd_files` and `cd_content`). Useful for environments that sit behind a reverse proxy that requires extra auth headers (e.g. Cloudflare Access service tokens). The legacy V3 API calls — the `vm_project` lookup, and the fallback download used when a v4 image download fails — do not send these headers, so they do not work through such a proxy; the V3 fallback download also does not use `nutanix_api_key`.
   - `nutanix_port` (number) - Port used for connection to Prism Central.
   - `nutanix_insecure` (bool) - Authorize connection to Prism Central without valid certificate.
-  - `nutanix_transfer_timeout` (number) - Transfer read timeout in minutes for upload/download operations (`source_image_path` and `cd_files`/`cd_content` uploads, image export and OVA export downloads). Default is `30` for transfer APIs. Set `0` to use the default.
+  - `nutanix_transfer_timeout` (number) - Transfer read timeout in minutes for upload/download operations (`source_image_path` and `cd_files`/`cd_content` uploads, image export and OVA export downloads; the V3 fallback image download has no timeout). Default is `30` for transfer APIs. Set `0` to use the default.
   - `vm_name` (string) - Name of the temporary VM to create. If not specified a random `packer-*` name will be used.
   - `cpu` (number) - Number of vCPU for temporary VM (default is 1).
   - `core` (number) - Number of cores per vCPU for temporary VM (default is 1).

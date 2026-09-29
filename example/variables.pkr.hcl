@@ -11,7 +11,8 @@ variable "nutanix_password" {
 
 # Set nutanix_api_key instead of username/password to authenticate via Prism
 # Central API key. If both are set, the api key is used for API calls and
-# username/password for Objects Lite image uploads.
+# username/password for Objects Lite image uploads and the V3 fallback image
+# download.
 variable "nutanix_api_key" {
   type      = string
   sensitive = true
