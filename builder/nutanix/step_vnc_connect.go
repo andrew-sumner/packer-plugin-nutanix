@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
@@ -114,7 +115,7 @@ func (s *stepVNCConnect) consoleHeaders() http.Header {
 	switch {
 	case cc.APIKey != "":
 		header.Set(ntnxAPIKeyHeaderName, cc.APIKey)
-	case cc.Username == ntnxAPIKeyHeaderName:
+	case strings.EqualFold(cc.Username, ntnxAPIKeyHeaderName):
 		header.Set(ntnxAPIKeyHeaderName, cc.Password)
 	default:
 		header.Set("Authorization", "Basic "+basicAuth(cc.Username, cc.Password))

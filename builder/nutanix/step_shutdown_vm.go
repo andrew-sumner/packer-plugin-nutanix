@@ -101,7 +101,9 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 
 	// Wait for the machine to actually shut down
 	log.Printf("waiting max %s for shutdown to complete", s.Timeout)
-	shutdownTimer := time.After(s.Timeout)
+	// The deadline is checked after each poll, so the VM's state is always
+	// checked once more after the timeout expires, as before.
+	deadline := time.Now().Add(s.Timeout)
 	pollInterval := s.pollInterval
 	if pollInterval == 0 {
 		pollInterval = defaultShutdownPollInterval
@@ -122,13 +124,7 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			break
 		}
 
-		select {
-		case <-ctx.Done():
-			err := fmt.Errorf("build cancelled while waiting for machine to shutdown: %w", ctx.Err())
-			state.Put("error", err)
-			ui.Error(err.Error())
-			return multistep.ActionHalt
-		case <-shutdownTimer:
+		if time.Now().After(deadline) {
 			err := errors.New("timeout while waiting for machine to shutdown")
 			if commandErr != nil {
 				err = fmt.Errorf("%w; the shutdown command failed: %w", err, commandErr)
@@ -136,6 +132,14 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			if lastGetVMErr != nil {
 				err = fmt.Errorf("%w; last error getting VM power state: %w", err, lastGetVMErr)
 			}
+			state.Put("error", err)
+			ui.Error(err.Error())
+			return multistep.ActionHalt
+		}
+
+		select {
+		case <-ctx.Done():
+			err := fmt.Errorf("build cancelled while waiting for machine to shutdown: %w", ctx.Err())
 			state.Put("error", err)
 			ui.Error(err.Error())
 			return multistep.ActionHalt

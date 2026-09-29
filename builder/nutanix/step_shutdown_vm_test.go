@@ -102,7 +102,7 @@ func TestStepShutdownResilience(t *testing.T) {
 				cancel()
 			}
 			state := shutdownState(tc.driver, tc.commType)
-			step := &StepShutdown{Command: tc.command, Timeout: 100 * time.Millisecond}
+			step := &StepShutdown{Command: tc.command, Timeout: 100 * time.Millisecond, pollInterval: 10 * time.Millisecond}
 
 			action := step.Run(ctx, state)
 			if action != tc.wantAction {
@@ -207,6 +207,31 @@ func TestStepShutdownTimeoutReportsGetVMError(t *testing.T) {
 	rawErr, ok := state.GetOk("error")
 	if !ok || !strings.Contains(rawErr.(error).Error(), "last error getting VM power state: 401 Unauthorized") {
 		t.Errorf("error = %v, want it to include the GetVM error", rawErr)
+	}
+}
+
+// offAfterGetVMDriver reports the VM as on until offAfter has passed since the
+// driver was created, then as off.
+type offAfterGetVMDriver struct {
+	Driver
+	offAt time.Time
+}
+
+func (d *offAfterGetVMDriver) GetVM(ctx context.Context, vmUUID string) (*nutanixInstance, error) {
+	state := vmmModels.POWERSTATE_ON
+	if time.Now().After(d.offAt) {
+		state = vmmModels.POWERSTATE_OFF
+	}
+	return &nutanixInstance{vm: &vmmModels.Vm{PowerState: state.Ref()}}, nil
+}
+
+// The VM's state is checked once more after the timeout expires, so a VM that
+// powers off between the last poll and the timeout is not reported as a failure.
+func TestStepShutdownChecksOnceMoreAfterTimeout(t *testing.T) {
+	d := &offAfterGetVMDriver{offAt: time.Now().Add(80 * time.Millisecond)}
+	step := &StepShutdown{Timeout: 100 * time.Millisecond, DisableStopInstance: true, pollInterval: 150 * time.Millisecond}
+	if action := step.Run(context.Background(), waitState(d)); action != multistep.ActionContinue {
+		t.Errorf("action = %v, want ActionContinue", action)
 	}
 }
 

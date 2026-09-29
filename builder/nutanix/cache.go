@@ -121,8 +121,8 @@ func getV4ConvergedClient(params *v4CacheParams, opts ...types.ClientOption[v4.C
 
 // applyCustomHeaders sets every entry in headers as a default header on the SDK
 // ApiClients the plugin uses: vmm, networking, clustermgmt, prism (tasks), volumes
-// and iam users. API instances within a group share one ApiClient, so it sets one
-// instance per group. Other ApiClients in the v4.Client (other iam clients,
+// and iam users. API instances within a group usually share one ApiClient, so
+// setting the same one twice is harmless. Other ApiClients in the v4.Client (other iam clients,
 // multidomain, datapolicies, monitoring) are not covered; add them here before
 // calling them.
 func applyCustomHeaders(c *v4.Client, headers map[string]string) {

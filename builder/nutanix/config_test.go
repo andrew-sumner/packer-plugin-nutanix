@@ -79,6 +79,25 @@ func TestPrepareWarnsWhenBothAuthMethodsSet(t *testing.T) {
 	}
 }
 
+// Uploads need both credential sets, so that configuration gets no warning.
+func TestPrepareNoPrecedenceWarningWhenUploading(t *testing.T) {
+	c := &Config{}
+	warnings, err := c.Prepare(minimalValidConfig(map[string]interface{}{
+		"nutanix_username": "u",
+		"nutanix_password": "p",
+		"nutanix_api_key":  "key123",
+		"cd_content":       map[string]string{"a.txt": "x"},
+	}))
+	if err != nil {
+		t.Fatalf("expected Prepare to succeed, got: %v", err)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "is used for API calls") {
+			t.Errorf("unexpected precedence warning when uploading: %s", w)
+		}
+	}
+}
+
 // Objects Lite signs uploads with username/password, so an API-key-only
 // config that uploads images must fail at Prepare rather than mid-build.
 func TestPrepareObjectsLiteUploadNeedsBasicAuth(t *testing.T) {

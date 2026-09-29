@@ -11,6 +11,8 @@ func TestConsoleHeaders(t *testing.T) {
 	}{
 		{"api key", ClusterConfig{APIKey: "k", Username: "u", Password: "p"}, "k", false},
 		{"legacy api key username", ClusterConfig{Username: "X-ntnx-api-key", Password: "legacy-key"}, "legacy-key", false},
+		// The REST clients match the legacy username case-insensitively.
+		{"legacy api key username, lower case", ClusterConfig{Username: "x-ntnx-api-key", Password: "legacy-key"}, "legacy-key", false},
 		{"basic auth", ClusterConfig{Username: "u", Password: "p"}, "", true},
 	}
 	for _, tc := range cases {

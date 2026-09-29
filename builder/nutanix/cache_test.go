@@ -139,7 +139,7 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		},
 	}}
 
-	request := func(t *testing.T, get func() (*convergedv4.Client, error)) []http.Header {
+	request := func(t *testing.T, get func() (*convergedv4.Client, error), call func(*convergedv4.Client)) []http.Header {
 		t.Helper()
 		mu.Lock()
 		seen = nil
@@ -148,7 +148,7 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, _ = c.Images.List(context.Background())
+		call(c)
 		mu.Lock()
 		defer mu.Unlock()
 		if len(seen) == 0 {
@@ -156,21 +156,38 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		}
 		return seen
 	}
+	listImages := func(c *convergedv4.Client) { _, _ = c.Images.List(context.Background()) }
 
-	for _, h := range request(t, d.getV4Client) {
-		if h.Get("X-ntnx-api-key") != "wire-test-key" {
-			t.Errorf("main client: expected X-ntnx-api-key, got headers %v", h)
-		}
-		if a := h.Get("Authorization"); a != "" {
-			t.Errorf("main client: expected no Authorization header with an api key, got %q", a)
-		}
-		if got := h.Get("Cf-Access-Client-Id"); got != "wire-test-client" {
-			t.Errorf("main client: expected custom header, got %q", got)
-		}
+	// One call per SDK ApiClient the plugin uses, so a header missing from any
+	// of them fails here.
+	ctx := context.Background()
+	mainCalls := map[string]func(*convergedv4.Client){
+		"vmm":                   listImages,
+		"networking":            func(c *convergedv4.Client) { _, _ = c.Subnets.List(ctx) },
+		"clustermgmt":           func(c *convergedv4.Client) { _, _ = c.Clusters.List(ctx) },
+		"clustermgmt (storage)": func(c *convergedv4.Client) { _, _ = c.StorageContainers.List(ctx) },
+		"prism (tasks)":         func(c *convergedv4.Client) { _, _ = c.Tasks.Get(ctx, "task-1") },
+		"volumes":               func(c *convergedv4.Client) { _, _ = c.VolumeGroups.List(ctx) },
+		"iam":                   func(c *convergedv4.Client) { _, _ = c.Users.List(ctx) },
+	}
+	for name, call := range mainCalls {
+		t.Run("main client "+name, func(t *testing.T) {
+			for _, h := range request(t, d.getV4Client, call) {
+				if h.Get("X-ntnx-api-key") != "wire-test-key" {
+					t.Errorf("expected X-ntnx-api-key, got headers %v", h)
+				}
+				if a := h.Get("Authorization"); a != "" {
+					t.Errorf("expected no Authorization header with an api key, got %q", a)
+				}
+				if got := h.Get("Cf-Access-Client-Id"); got != "wire-test-client" {
+					t.Errorf("expected custom header, got %q", got)
+				}
+			}
+		})
 	}
 
 	var sawBasic bool
-	for _, h := range request(t, d.getV4UploadClient) {
+	for _, h := range request(t, d.getV4UploadClient, listImages) {
 		if strings.HasPrefix(h.Get("Authorization"), "Basic ") {
 			sawBasic = true
 		}
