@@ -246,8 +246,10 @@ func TestV4CacheParamsKeyDifferentiates(t *testing.T) {
 	withHeaders := *base
 	withHeaders.customHeaders = map[string]string{"X-Foo": "bar"}
 
-	if base.Key() == withAPIKey.Key() {
-		t.Error("expected different cache key when apiKey is set")
+	// Credentials are not hashed into the key; the cache's validation hash of
+	// ManagementEndpoint replaces the client when they change.
+	if base.ManagementEndpoint().APIKey == withAPIKey.ManagementEndpoint().APIKey {
+		t.Error("expected the api key to reach ManagementEndpoint")
 	}
 	if base.Key() == withHeaders.Key() {
 		t.Error("expected different cache key when custom headers are set")
