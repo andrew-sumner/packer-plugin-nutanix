@@ -76,20 +76,28 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 	log.Printf("waiting max %s for shutdown to complete", s.Timeout)
 	shutdownTimer := time.After(s.Timeout)
 	for {
-		running, _ := driver.GetVM(ctx, vmUUID)
-		if running.PowerState() == "OFF" {
+		// GetVM honours ctx, so it errors once the build is cancelled; a nil
+		// VM must not be dereferenced.
+		running, err := driver.GetVM(ctx, vmUUID)
+		if err != nil {
+			log.Printf("error getting VM power state: %s", err)
+		} else if running.PowerState() == "OFF" {
 			log.Printf("VM powered off")
 			break
 		}
 
 		select {
+		case <-ctx.Done():
+			err := fmt.Errorf("build cancelled while waiting for machine to shutdown: %w", ctx.Err())
+			state.Put("error", err)
+			ui.Error(err.Error())
+			return multistep.ActionHalt
 		case <-shutdownTimer:
 			err := errors.New("timeout while waiting for machine to shutdown")
 			state.Put("error", err)
 			ui.Error(err.Error())
 			return multistep.ActionHalt
-		default:
-			time.Sleep(15 * time.Second)
+		case <-time.After(15 * time.Second):
 		}
 	}
 
