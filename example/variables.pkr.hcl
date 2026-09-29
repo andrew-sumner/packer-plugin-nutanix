@@ -10,15 +10,16 @@ variable "nutanix_password" {
 }
 
 # Set nutanix_api_key instead of username/password to authenticate via Prism
-# Central API key. If both are set, the api key wins.
+# Central API key. If both are set, the api key is used for API calls and
+# username/password for Objects Lite image uploads.
 variable "nutanix_api_key" {
   type      = string
   sensitive = true
   default   = ""
 }
 
-# Optional extra HTTP headers attached to every Prism Central request — useful
-# behind reverse proxies like Cloudflare Access.
+# Optional extra HTTP headers attached to v4 API calls, the VNC console and
+# Objects Lite uploads — useful behind reverse proxies like Cloudflare Access.
 variable "nutanix_custom_headers" {
   type      = map(string)
   sensitive = true

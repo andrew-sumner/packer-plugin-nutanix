@@ -318,7 +318,7 @@ func (c *Config) Prepare(raws ...interface{}) ([]string, error) {
 		errs = packersdk.MultiErrorAppend(errs, fmt.Errorf("authentication required: provide either nutanix_api_key or both nutanix_username and nutanix_password"))
 	}
 	if hasAPIKey && (c.ClusterConfig.Username != "" || c.ClusterConfig.Password != "") {
-		msg := "Both nutanix_api_key and nutanix_username/nutanix_password are set; nutanix_api_key is used for API calls, and nutanix_username/nutanix_password only for Objects Lite image uploads"
+		msg := "Both nutanix_api_key and nutanix_username/nutanix_password are set; nutanix_api_key is used for API calls, and nutanix_username/nutanix_password for Objects Lite image uploads and the V3 fallback image download"
 		log.Println(msg)
 		warnings = append(warnings, msg)
 	}
