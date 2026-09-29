@@ -3,7 +3,6 @@ package nutanix
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -16,11 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
-	s3manager "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
 	client "github.com/nutanix-cloud-native/prism-go-client"
 	"github.com/nutanix-cloud-native/prism-go-client/converged"
@@ -230,6 +224,19 @@ func (d *NutanixDriver) getV4Client() (*convergedv4.Client, error) {
 // getV4TransferClient returns a V4 client for upload/download operations.
 // If nutanix_transfer_timeout is not configured, default transfer timeout is 30 minutes.
 func (d *NutanixDriver) getV4TransferClient() (*convergedv4.Client, error) {
+	return d.newV4TransferClient(false)
+}
+
+// getV4UploadClient returns a V4 transfer client for Objects Lite image
+// uploads. Unlike getV4TransferClient it keeps username/password on the
+// client even when an API key is configured, because the upload signs its S3
+// requests with them. Use it for uploads only: the vmm SDK also sends Basic
+// auth on every request from a client that holds a username/password.
+func (d *NutanixDriver) getV4UploadClient() (*convergedv4.Client, error) {
+	return d.newV4TransferClient(true)
+}
+
+func (d *NutanixDriver) newV4TransferClient(objectsUpload bool) (*convergedv4.Client, error) {
 	opts := []types.ClientOption[v4.Client]{}
 	transferTimeout := d.ClusterConfig.TransferTimeout
 	if transferTimeout <= 0 {
@@ -245,6 +252,8 @@ func (d *NutanixDriver) getV4TransferClient() (*convergedv4.Client, error) {
 		apiKey:        d.ClusterConfig.APIKey,
 		customHeaders: d.ClusterConfig.CustomHeaders,
 		insecure:      d.ClusterConfig.Insecure,
+		transfer:      true,
+		objectsUpload: objectsUpload,
 	}
 
 	return getV4ConvergedClient(cacheParams, opts...)
@@ -876,7 +885,7 @@ func (d *NutanixDriver) PowerOn(ctx context.Context, vmUUID string) error {
 	}
 
 	log.Printf("powering on vm %s...", vmUUID)
-	powerOnOp, err := v4Client.VMs.PowerOnVM(vmUUID)
+	powerOnOp, err := v4Client.VMs.PowerOnVM(ctx, vmUUID)
 	if err != nil {
 		log.Printf("error initiating power on for vm: %s", err.Error())
 		return fmt.Errorf("failed to power on VM: %s", err.Error())
@@ -1101,14 +1110,15 @@ func (d *NutanixDriver) CreateImageURL(ctx context.Context, disk VmDisk, vm VmCo
 
 // CreateImageFile uploads a local file as a new image using Objects Lite.
 //
-// Reimplemented from prism-go-client's ImagesService.Upload so that the AWS
-// S3 PutObject call honours nutanix_api_key and nutanix_custom_headers — the
-// upstream version uses an unconfigured AWS HTTP client and silently drops
-// any service-token headers (e.g. Cloudflare Access) needed to reach Prism
-// Central. The image entity creation still goes through the converged client
-// where AddDefaultHeader has already been applied.
+// The Objects Lite S3 upload does not go through the converged client's
+// default headers, so nutanix_custom_headers are passed explicitly with
+// WithExtraHeaders to reach Prism Central behind a service-token gateway
+// (e.g. Cloudflare Access). Objects Lite validates the AWS V4 signature
+// against Prism Central's user table, so nutanix_username/nutanix_password
+// are required even when the rest of the build authenticates with
+// nutanix_api_key; getV4UploadClient carries them for this call only.
 func (d *NutanixDriver) CreateImageFile(ctx context.Context, filePath string, vm VmConfig) (*nutanixImage, error) {
-	v4Client, err := d.getV4TransferClient()
+	v4Client, err := d.getV4UploadClient()
 	if err != nil {
 		return nil, fmt.Errorf("error creating V4 client: %s", err.Error())
 	}
@@ -1117,30 +1127,22 @@ func (d *NutanixDriver) CreateImageFile(ctx context.Context, filePath string, vm
 
 	log.Printf("creating and uploading image: %s", file)
 
-	if err := d.uploadImageObject(ctx, file, filePath); err != nil {
+	extraHeaders := http.Header{}
+	for k, v := range d.ClusterConfig.CustomHeaders {
+		extraHeaders.Set(k, v)
+	}
+
+	err = v4Client.Images.Upload(ctx, file, filePath, converged.WithExtraHeaders(extraHeaders))
+	if err != nil {
 		return nil, fmt.Errorf("error while uploading image: %s", err.Error())
 	}
 
-	imageType := imageModels.IMAGETYPE_DISK_IMAGE
-	if strings.EqualFold(filepath.Ext(filePath), ".iso") {
-		imageType = imageModels.IMAGETYPE_ISO_IMAGE
-	}
-	objectsSource := imageModels.NewObjectsLiteSource()
-	objectsSource.Key = &file
-	source := imageModels.NewOneOfImageSource()
-	if err := source.SetValue(*objectsSource); err != nil {
-		return nil, fmt.Errorf("error setting Objects Lite source: %s", err.Error())
-	}
-	v4Image := imageModels.NewImage()
-	v4Image.Name = &file
-	v4Image.Type = imageType.Ref()
-	v4Image.Source = source
-
-	if _, err := v4Client.Images.Create(ctx, v4Image); err != nil {
-		return nil, fmt.Errorf("error while creating image from Objects: %s", err.Error())
+	lookupClient, err := d.getV4Client()
+	if err != nil {
+		return nil, fmt.Errorf("error creating V4 client: %s", err.Error())
 	}
 
-	createdImage, err := findImageByName(ctx, v4Client, file, d.Config.AllowDuplicateImages)
+	createdImage, err := findImageByName(ctx, lookupClient, file, d.Config.AllowDuplicateImages)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting created image: %s", err.Error())
 	}
@@ -1148,96 +1150,6 @@ func (d *NutanixDriver) CreateImageFile(ctx context.Context, filePath string, vm
 	log.Printf("image successfully uploaded: %s", file)
 
 	return createdImage, nil
-}
-
-// uploadImageObject uploads a local file to Prism Central's Objects Lite S3
-// endpoint. Mirrors prism-go-client's converged/v4/images.go awsConfig() but
-// builds the AWS HTTP client with a header-injecting transport so any
-// service-token gateway in front of Prism Central (e.g. Cloudflare Access)
-// sees the same nutanix_custom_headers the converged client uses on REST API
-// calls.
-//
-// Objects Lite validates the AWS V4 signature against Prism Central's user
-// table, so nutanix_username/nutanix_password are required even when the rest
-// of the build authenticates with nutanix_api_key.
-func (d *NutanixDriver) uploadImageObject(ctx context.Context, key, filePath string) error {
-	endpoint := fmt.Sprintf("https://%s:%d/api/prism/v4.0/objects/", d.ClusterConfig.Endpoint, d.ClusterConfig.Port)
-
-	username := strings.TrimSpace(d.ClusterConfig.Username)
-	password := strings.TrimSpace(d.ClusterConfig.Password)
-	if username == "" || password == "" {
-		return fmt.Errorf("username and password are required for Objects Lite auth")
-	}
-
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", username, password)))
-
-	extraHeaders := http.Header{}
-	for k, v := range d.ClusterConfig.CustomHeaders {
-		extraHeaders.Set(k, v)
-	}
-
-	httpClient := &http.Client{
-		Transport: &headerInjectingTransport{
-			base: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: d.ClusterConfig.Insecure},
-			},
-			headers: extraHeaders,
-		},
-	}
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(region),
-		awsconfig.WithCredentialsProvider(awscreds.NewStaticCredentialsProvider(encoded, encoded, "")),
-		awsconfig.WithHTTPClient(httpClient),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to load AWS config: %w", err)
-	}
-
-	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
-		o.BaseEndpoint = aws.String(endpoint)
-	})
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open image file %q: %w", filePath, err)
-	}
-	defer func() { _ = file.Close() }()
-
-	uploader := s3manager.NewUploader(s3Client)
-	if _, err := uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String("vmm-images"),
-		Key:         aws.String(key),
-		Body:        file,
-		ContentType: aws.String("application/octet-stream"),
-	}); err != nil {
-		return fmt.Errorf("failed to upload image file to Objects: %w", err)
-	}
-	return nil
-}
-
-// headerInjectingTransport wraps an http.RoundTripper to set a fixed set of
-// headers on every outgoing request. Used so that AWS SDK calls inherit the
-// same custom headers and API key the converged client uses on its REST API
-// calls.
-type headerInjectingTransport struct {
-	base    http.RoundTripper
-	headers http.Header
-}
-
-func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	for k, vs := range t.headers {
-		for _, v := range vs {
-			clone.Header.Set(k, v)
-		}
-	}
-	return t.base.RoundTrip(clone)
 }
 
 func (d *NutanixDriver) DeleteImage(ctx context.Context, imageUUID string) error {
@@ -1389,7 +1301,7 @@ func (d *NutanixDriver) CreateOVA(ctx context.Context, ovaName string, vmUUID st
 func (d *NutanixDriver) ExportOVA(ctx context.Context, ovaName string) (string, error) {
 	log.Printf("starting OVA export for OVA: %s", ovaName)
 
-	v4Client, err := d.getV4Client()
+	v4Client, err := d.getV4TransferClient()
 	if err != nil {
 		return "", fmt.Errorf("error creating V4 client: %s", err.Error())
 	}
@@ -1512,7 +1424,7 @@ func (d *NutanixDriver) PowerOff(ctx context.Context, vmUUID string) error {
 
 	log.Printf("stopping VM: %s", d.Config.VMName)
 
-	operation, err := v4Client.VMs.PowerOffVM(vmUUID)
+	operation, err := v4Client.VMs.PowerOffVM(ctx, vmUUID)
 	if err != nil {
 		return fmt.Errorf("error while PowerOff VM: %s", err.Error())
 	}

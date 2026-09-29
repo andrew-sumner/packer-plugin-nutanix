@@ -12,10 +12,6 @@ import (
 	v4 "github.com/nutanix-cloud-native/prism-go-client/v4"
 )
 
-// ntnxAPIKeyHeader is the HTTP header recognised by Prism Central for API key
-// auth. The casing matches what prism-go-client emits (see v4/v4.go).
-const ntnxAPIKeyHeader = "X-ntnx-api-key"
-
 // v4SDKClientCache caches the underlying *v4.Client per connection. Session
 // auth is enabled to match the previous behaviour.
 var v4SDKClientCache = v4.NewClientCache(v4.WithSessionAuth(true))
@@ -29,15 +25,30 @@ type v4CacheParams struct {
 	apiKey        string
 	customHeaders map[string]string
 	insecure      bool
+	// transfer marks a client created with the transfer read timeout. It gets
+	// its own cache entry because a cache hit ignores client options, so a
+	// shared entry would keep whichever timeout was created first.
+	transfer bool
+	// objectsUpload keeps username/password on the client alongside an API
+	// key, for the Objects Lite image upload only. See ManagementEndpoint.
+	objectsUpload bool
 }
 
 // Key returns a unique cache key for this Prism Central connection. Includes
-// API key and custom headers so different auth produces different cache
-// entries; the values themselves are hashed to avoid leaking secrets into
-// log lines that may print the key.
+// API key, custom headers and the transfer/upload flags so different auth or
+// client options produce different cache entries; the values themselves are
+// hashed to avoid leaking secrets into log lines that may print the key.
 func (p *v4CacheParams) Key() string {
 	h := sha256.New()
 	h.Write([]byte(p.apiKey))
+	h.Write([]byte{0})
+	if p.transfer {
+		h.Write([]byte("transfer"))
+	}
+	h.Write([]byte{0})
+	if p.objectsUpload {
+		h.Write([]byte("objects-upload"))
+	}
 	h.Write([]byte{0})
 	keys := make([]string, 0, len(p.customHeaders))
 	for k := range p.customHeaders {
@@ -54,11 +65,13 @@ func (p *v4CacheParams) Key() string {
 }
 
 // ManagementEndpoint returns the management endpoint for client creation and
-// cache validation. When an API key is configured we use the prism-go-client
-// trick of putting the api-key header name in Username and the key itself in
-// Password — v4.setAuthHeader detects this and emits the X-ntnx-api-key
-// header instead of Basic auth. The cache also requires both fields to be
-// non-empty.
+// cache validation. When an API key is configured, only the key is passed, so
+// requests carry the X-ntnx-api-key header and no Basic auth.
+//
+// The exception is objectsUpload: the Objects Lite image upload signs its S3
+// requests with the username/password held on the client, so those are kept
+// alongside the key. The vmm SDK then also sends Basic auth on that client's
+// requests, which is why it is a separate cache entry used only for uploads.
 func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 	u := &url.URL{
 		Scheme: "https",
@@ -69,9 +82,10 @@ func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 		Password: p.password,
 	}
 	if p.apiKey != "" {
-		creds = types.ApiCredentials{
-			Username: ntnxAPIKeyHeader,
-			Password: p.apiKey,
+		creds = types.ApiCredentials{APIKey: p.apiKey}
+		if p.objectsUpload {
+			creds.Username = p.username
+			creds.Password = p.password
 		}
 	}
 	return types.ManagementEndpoint{
