@@ -5,11 +5,12 @@ import (
 	"testing"
 )
 
+// minimalValidConfig returns the smallest map of raws that Prepare will accept
+// when paired with the auth fields chosen in the test. Communicator is set to
+// "none" so vm_nics aren't required.
 func minimalValidConfig(extra map[string]interface{}) map[string]interface{} {
 	cfg := map[string]interface{}{
 		"nutanix_endpoint": "pc.example.com",
-		"nutanix_username": "admin",
-		"nutanix_password": "password",
 		"cluster_name":     "cluster-1",
 		"os_type":          "Linux",
 		"communicator":     "none",
@@ -54,8 +55,7 @@ func TestPrepareWindowsInstallType(t *testing.T) {
 			if tc.value != "" {
 				extra["windows_install_type"] = tc.value
 			}
-			// minimalValidConfig carries username/password; pass them
-			// explicitly so the test does not depend on the helper's auth.
+			// minimalValidConfig carries no credentials.
 			extra["nutanix_username"] = "admin"
 			extra["nutanix_password"] = "password"
 

@@ -82,7 +82,7 @@ These parameters allow to configure everything around image creation, from the t
 - `winrm_username` (string) - User login for WinRM connection.
 - `winrm_password` (string) - Password this User.
 - `user_data` (string) - With `os_type = "Windows"`, a base64-encoded Sysprep `unattend.xml`, delivered through Prism Central guest customization.
-- `windows_install_type` (string) - Sysprep install type for Windows guest customization, used only when `os_type = "Windows"` and `user_data` is set. `PREPARED` (default) for an image that is already sysprepped; AHV delivers the unattend as `Unattend.xml` and may restart the VM to apply it. `FRESH` for a fresh install from ISO; AHV delivers it as `Autounattend.xml`, which Windows Setup reads, and does not restart the VM after shutdown. Case-insensitive.
+- `windows_install_type` (string) - Sysprep install type for Windows guest customization, used only when `os_type = "Windows"` and `user_data` is set: whether the unattend configuration is applied to an image that is already prepared (`PREPARED`, the default) or drives a fresh install (`FRESH`). Case-insensitive. In testing, with `PREPARED` AHV delivered the unattend as `Unattend.xml` and restarted the VM after a sysprep `/shutdown`, which stops Packer capturing the disk; with `FRESH` it delivered `Autounattend.xml`, which Windows Setup reads during an ISO install, and did not restart the VM.
 
 ## Disk configuration
 Use `vm_disks{}` entry to configure disk to your VM image. If you want to configure several disks, use this entry multiple times.
