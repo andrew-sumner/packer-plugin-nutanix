@@ -318,8 +318,20 @@ func (c *Config) Prepare(raws ...interface{}) ([]string, error) {
 		errs = packersdk.MultiErrorAppend(errs, fmt.Errorf("authentication required: provide either nutanix_api_key or both nutanix_username and nutanix_password"))
 	}
 	if hasAPIKey && (c.ClusterConfig.Username != "" || c.ClusterConfig.Password != "") {
-		log.Println("Both nutanix_api_key and nutanix_username/nutanix_password are set; nutanix_api_key takes precedence")
-		warnings = append(warnings, "Both nutanix_api_key and nutanix_username/nutanix_password are set; nutanix_api_key takes precedence")
+		msg := "Both nutanix_api_key and nutanix_username/nutanix_password are set; nutanix_api_key is used for API calls, and nutanix_username/nutanix_password only for Objects Lite image uploads"
+		log.Println(msg)
+		warnings = append(warnings, msg)
+	}
+	// Objects Lite signs image uploads with username/password, even when the
+	// rest of the build authenticates with an API key.
+	usesObjectsLite := len(c.CDConfig.CDFiles) > 0 || len(c.CDConfig.CDContent) > 0
+	for _, disk := range c.VmConfig.VmDisks {
+		if disk.SourceImagePath != "" {
+			usesObjectsLite = true
+		}
+	}
+	if hasAPIKey && !hasBasicAuth && usesObjectsLite {
+		errs = packersdk.MultiErrorAppend(errs, fmt.Errorf("nutanix_username and nutanix_password are required with nutanix_api_key when uploading images (source_image_path, cd_files or cd_content): Objects Lite signs uploads with them"))
 	}
 
 	if c.VmConfig.VMName == "" {
@@ -443,4 +455,3 @@ func (c *Config) Prepare(raws ...interface{}) ([]string, error) {
 
 	return warnings, nil
 }
-
