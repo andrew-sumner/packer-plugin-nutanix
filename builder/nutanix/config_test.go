@@ -37,7 +37,7 @@ func TestPrepareAcceptsAPIKeyOnly(t *testing.T) {
 		t.Fatalf("expected Prepare to succeed with api-key only, got: %v", err)
 	}
 	for _, w := range warnings {
-		if strings.Contains(w, "takes precedence") {
+		if strings.Contains(w, "is used for API calls") {
 			t.Errorf("unexpected precedence warning when only api-key is set: %s", w)
 		}
 	}
@@ -69,13 +69,53 @@ func TestPrepareWarnsWhenBothAuthMethodsSet(t *testing.T) {
 	}
 	found := false
 	for _, w := range warnings {
-		if strings.Contains(w, "takes precedence") {
+		if strings.Contains(w, "is used for API calls") {
 			found = true
 			break
 		}
 	}
 	if !found {
 		t.Errorf("expected precedence warning, got warnings: %v", warnings)
+	}
+}
+
+// Objects Lite signs uploads with username/password, so an API-key-only
+// config that uploads images must fail at Prepare rather than mid-build.
+func TestPrepareObjectsLiteUploadNeedsBasicAuth(t *testing.T) {
+	cases := []struct {
+		name    string
+		extra   map[string]interface{}
+		wantErr bool
+	}{
+		{"api key only, no upload", map[string]interface{}{"nutanix_api_key": "k"}, false},
+		{"api key only, cd_content", map[string]interface{}{
+			"nutanix_api_key": "k",
+			"cd_content":      map[string]string{"a.txt": "x"},
+		}, true},
+		{"api key plus basic, cd_content", map[string]interface{}{
+			"nutanix_api_key":  "k",
+			"nutanix_username": "u",
+			"nutanix_password": "p",
+			"cd_content":       map[string]string{"a.txt": "x"},
+		}, false},
+		{"basic only, cd_content", map[string]interface{}{
+			"nutanix_username": "u",
+			"nutanix_password": "p",
+			"cd_content":       map[string]string{"a.txt": "x"},
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{}
+			_, err := c.Prepare(minimalValidConfig(tc.extra))
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "Objects Lite signs uploads") {
+					t.Errorf("expected Objects Lite credentials error, got: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -90,27 +130,57 @@ func TestPrepareErrorsWhenNoAuth(t *testing.T) {
 	}
 }
 
-func TestPrepareRejectsInvalidWindowsInstallType(t *testing.T) {
-	c := &Config{}
-	_, err := c.Prepare(minimalValidConfig(map[string]interface{}{
-		"nutanix_username":     "admin",
-		"nutanix_password":     "password",
-		"windows_install_type": "fresh",
-	}))
-	if err != nil {
-		t.Fatalf("expected case-insensitive match to succeed, got: %v", err)
+func TestPrepareWindowsInstallType(t *testing.T) {
+	windows := map[string]interface{}{"os_type": "Windows", "user_data": "PHVuYXR0ZW5kLz4="}
+	cases := []struct {
+		name         string
+		value        string
+		extra        map[string]interface{}
+		wantErr      bool
+		wantNoEffect bool
+	}{
+		{"unset", "", windows, false, false},
+		{"PREPARED", "PREPARED", windows, false, false},
+		{"lowercase prepared", "prepared", windows, false, false},
+		{"FRESH", "FRESH", windows, false, false},
+		{"lowercase fresh", "fresh", windows, false, false},
+		{"invalid", "bogus", windows, true, false},
+		{"linux os_type", "FRESH", map[string]interface{}{}, false, true},
+		{"windows without user_data", "FRESH", map[string]interface{}{"os_type": "Windows"}, false, true},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := map[string]interface{}{}
+			for k, v := range tc.extra {
+				extra[k] = v
+			}
+			if tc.value != "" {
+				extra["windows_install_type"] = tc.value
+			}
+			// minimalValidConfig carries no credentials.
+			extra["nutanix_username"] = "admin"
+			extra["nutanix_password"] = "password"
 
-	c2 := &Config{}
-	_, err = c2.Prepare(minimalValidConfig(map[string]interface{}{
-		"nutanix_username":     "admin",
-		"nutanix_password":     "password",
-		"windows_install_type": "INVALID",
-	}))
-	if err == nil {
-		t.Fatal("expected Prepare to fail with invalid windows_install_type")
-	}
-	if !strings.Contains(err.Error(), "windows_install_type must be FRESH or PREPARED") {
-		t.Errorf("unexpected error: %v", err)
+			c := &Config{}
+			warnings, err := c.Prepare(minimalValidConfig(extra))
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "windows_install_type must be FRESH or PREPARED") {
+					t.Errorf("expected windows_install_type error, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			noEffect := false
+			for _, w := range warnings {
+				if strings.Contains(w, "windows_install_type has no effect") {
+					noEffect = true
+				}
+			}
+			if noEffect != tc.wantNoEffect {
+				t.Errorf("no-effect warning = %v, want %v (warnings: %v)", noEffect, tc.wantNoEffect, warnings)
+			}
+		})
 	}
 }

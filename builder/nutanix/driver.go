@@ -910,10 +910,12 @@ func (d *NutanixDriver) WaitForIP(ctx context.Context, vmUUID string, ipNet *net
 
 	for {
 		// Bail out immediately if the wait was cancelled (ip_wait_timeout fired,
-		// or the build was interrupted). The v4 SDK's VMs.Get does not honour the
-		// context, so without this explicit check the loop would never observe the
-		// cancellation and the caller's `<-waitDone` would block until an IP is
-		// found (i.e. potentially forever for a VM that never gets one).
+		// or the build was interrupted). Don't assume VMs.Get observes the
+		// cancellation: prism-go-client only passes the context through from
+		// v0.8.2. This check and the context-aware backoff below together end
+		// the loop; without a context check here, the caller's `<-waitDone`
+		// would block until an IP is found, potentially forever for a VM that
+		// never gets one.
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -1090,7 +1092,9 @@ func (d *NutanixDriver) CreateImageURL(ctx context.Context, disk VmDisk, vm VmCo
 		verifiedImage, verifyErr := v4Client.Images.Get(ctx, imageUUID)
 		if verifyErr != nil {
 			log.Printf("Error verifying image (attempt %d/%d): %s", i+1, maxRetries, verifyErr.Error())
-			time.Sleep(5 * time.Second)
+			if err := sleepCtx(ctx, 5*time.Second); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
@@ -1101,7 +1105,9 @@ func (d *NutanixDriver) CreateImageURL(ctx context.Context, disk VmDisk, vm VmCo
 		}
 
 		log.Printf("Image %s not ready yet (SizeBytes is nil or 0), waiting... (attempt %d/%d)", imageUUID, i+1, maxRetries)
-		time.Sleep(5 * time.Second)
+		if err := sleepCtx(ctx, 5*time.Second); err != nil {
+			return nil, err
+		}
 	}
 
 	log.Printf("WARNING: Image %s readiness check timed out, proceeding anyway...", imageUUID)
@@ -1315,7 +1321,9 @@ func (d *NutanixDriver) ExportOVA(ctx context.Context, ovaName string) (string, 
 			log.Printf("error finding OVA: %s", err.Error())
 		}
 		if ovaUUID == "" {
-			<-time.After(5 * time.Second)
+			if err := sleepCtx(ctx, 5*time.Second); err != nil {
+				return "", err
+			}
 		} else {
 			break
 		}

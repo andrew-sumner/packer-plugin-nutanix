@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"sync"
 
 	convergedv4 "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
 	"github.com/nutanix-cloud-native/prism-go-client/environment/types"
@@ -35,13 +36,14 @@ type v4CacheParams struct {
 }
 
 // Key returns a unique cache key for this Prism Central connection. Includes
-// API key, custom headers and the transfer/upload flags so different auth or
-// client options produce different cache entries; the values themselves are
+// the custom headers and the transfer/upload flags so different headers or
+// client options produce different cache entries; the header values are
 // hashed to avoid leaking secrets into log lines that may print the key.
+// Credentials, including the API key, are not part of the key: the cache's
+// validation hash covers ManagementEndpoint, so a change of credentials
+// replaces the cached client.
 func (p *v4CacheParams) Key() string {
 	h := sha256.New()
-	h.Write([]byte(p.apiKey))
-	h.Write([]byte{0})
 	if p.transfer {
 		h.Write([]byte("transfer"))
 	}
@@ -95,26 +97,34 @@ func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 	}
 }
 
+// customHeadersApplied records, per cached *v4.Client, that its custom headers
+// have been applied. The SDK reads its default headers map on every request,
+// so writing it again on a cache hit races with requests already using the
+// client from another goroutine.
+var customHeadersApplied sync.Map // *v4.Client -> *sync.Once
+
 // getV4ConvergedClient returns a converged v4 client for the given params,
 // reusing the cached underlying *v4.Client and applying any custom headers
-// to all SDK API instances. AddDefaultHeader is idempotent for a given key,
-// so re-applying on cache hits is safe.
+// to all SDK API instances once per client. The cache key includes the
+// headers, so a cached client always carries the same set.
 func getV4ConvergedClient(params *v4CacheParams, opts ...types.ClientOption[v4.Client]) (*convergedv4.Client, error) {
 	v4Client, err := v4SDKClientCache.GetOrCreate(params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get or create V4 client: %w", err)
 	}
 	if len(params.customHeaders) > 0 {
-		applyCustomHeaders(v4Client, params.customHeaders)
+		once, _ := customHeadersApplied.LoadOrStore(v4Client, new(sync.Once))
+		once.(*sync.Once).Do(func() { applyCustomHeaders(v4Client, params.customHeaders) })
 	}
 	return convergedv4.NewClientFromV4SDKClient(v4Client), nil
 }
 
-// applyCustomHeaders sets every entry in headers as a default header on each
-// underlying SDK ApiClient inside the v4.Client. The v4 client groups its
-// API instances by service domain (vmm, networking, clustermgmt, prism,
-// volumes, iam), and each group shares a single ApiClient — so we pick one
-// instance per group rather than walking every field.
+// applyCustomHeaders sets every entry in headers as a default header on the SDK
+// ApiClients the plugin uses: vmm, networking, clustermgmt, prism (tasks), volumes
+// and iam users. API instances within a group share one ApiClient, so it sets one
+// instance per group. Other ApiClients in the v4.Client (other iam clients,
+// multidomain, datapolicies, monitoring) are not covered; add them here before
+// calling them.
 func applyCustomHeaders(c *v4.Client, headers map[string]string) {
 	if c == nil || len(headers) == 0 {
 		return
