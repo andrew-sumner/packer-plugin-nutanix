@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"sync"
 
 	convergedv4 "github.com/nutanix-cloud-native/prism-go-client/converged/v4"
 	"github.com/nutanix-cloud-native/prism-go-client/environment/types"
@@ -95,17 +96,24 @@ func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 	}
 }
 
+// customHeadersApplied records, per cached *v4.Client, that its custom headers
+// have been applied. The SDK reads its default headers map on every request,
+// so writing it again on a cache hit races with requests already using the
+// client from another goroutine.
+var customHeadersApplied sync.Map // *v4.Client -> *sync.Once
+
 // getV4ConvergedClient returns a converged v4 client for the given params,
 // reusing the cached underlying *v4.Client and applying any custom headers
-// to all SDK API instances. AddDefaultHeader is idempotent for a given key,
-// so re-applying on cache hits is safe.
+// to all SDK API instances once per client. The cache key includes the
+// headers, so a cached client always carries the same set.
 func getV4ConvergedClient(params *v4CacheParams, opts ...types.ClientOption[v4.Client]) (*convergedv4.Client, error) {
 	v4Client, err := v4SDKClientCache.GetOrCreate(params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get or create V4 client: %w", err)
 	}
 	if len(params.customHeaders) > 0 {
-		applyCustomHeaders(v4Client, params.customHeaders)
+		once, _ := customHeadersApplied.LoadOrStore(v4Client, new(sync.Once))
+		once.(*sync.Once).Do(func() { applyCustomHeaders(v4Client, params.customHeaders) })
 	}
 	return convergedv4.NewClientFromV4SDKClient(v4Client), nil
 }

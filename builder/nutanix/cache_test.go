@@ -134,6 +134,9 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		Password: "secret",
 		APIKey:   "wire-test-key",
 		Insecure: true,
+		CustomHeaders: map[string]string{
+			"Cf-Access-Client-Id": "wire-test-client",
+		},
 	}}
 
 	request := func(t *testing.T, get func() (*convergedv4.Client, error)) []http.Header {
@@ -161,6 +164,9 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		if a := h.Get("Authorization"); a != "" {
 			t.Errorf("main client: expected no Authorization header with an api key, got %q", a)
 		}
+		if got := h.Get("Cf-Access-Client-Id"); got != "wire-test-client" {
+			t.Errorf("main client: expected custom header, got %q", got)
+		}
 	}
 
 	var sawBasic bool
@@ -168,10 +174,69 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 		if strings.HasPrefix(h.Get("Authorization"), "Basic ") {
 			sawBasic = true
 		}
+		if got := h.Get("Cf-Access-Client-Id"); got != "wire-test-client" {
+			t.Errorf("upload client: expected custom header, got %q", got)
+		}
 	}
 	if !sawBasic {
 		t.Error("upload client: expected Basic credentials for the Objects Lite upload")
 	}
+}
+
+// TestV4ClientCustomHeadersNoRaceOnCacheHit gets the cached client repeatedly
+// while another goroutine makes requests with it. Writing the SDK's default
+// headers on every cache hit made the Go runtime abort with "concurrent map
+// read and map write".
+func TestV4ClientCustomHeadersNoRaceOnCacheHit(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &NutanixDriver{ClusterConfig: ClusterConfig{
+		Endpoint:      u.Hostname(),
+		Port:          int32(port),
+		APIKey:        "race-test-key",
+		Insecure:      true,
+		CustomHeaders: map[string]string{"Cf-Access-Client-Id": "race-test-client"},
+	}}
+
+	c, err := d.getV4Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = c.Images.List(context.Background())
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := d.getV4Client(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }
 
 func TestV4CacheParamsKeyDifferentiates(t *testing.T) {
