@@ -3,8 +3,10 @@ package nutanix
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
 	"github.com/hashicorp/packer-plugin-sdk/packer"
@@ -96,4 +98,19 @@ func TestStepBuildVMCleanupAfterCancel(t *testing.T) {
 	(&stepBuildVM{}).Cleanup(state)
 
 	assertLiveBoundedContexts(t, d, 2)
+}
+
+func TestSleepCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleepCtx(ctx, time.Minute); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Error("sleepCtx did not return promptly on a cancelled context")
+	}
+	if err := sleepCtx(context.Background(), time.Millisecond); err != nil {
+		t.Errorf("err = %v, want nil after the duration", err)
+	}
 }
