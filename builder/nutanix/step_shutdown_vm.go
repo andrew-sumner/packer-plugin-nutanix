@@ -43,11 +43,16 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 	config := state.Get("config").(*Config)
 	vmUUID := state.Get("vm_uuid").(string)
 
+	// commandErr holds a shutdown_command error that may only mean the
+	// command powered the VM off and dropped the connection (for example
+	// sysprep /shutdown over WinRM). It is reported if the VM never stops.
+	var commandErr error
+
 	if !s.DisableStopInstance {
 
 		if config.Comm.Type == "none" {
 			ui.Say("No Communicator configured, halting the virtual machine...")
-			if err := driver.PowerOff(ctx, vmUUID); err != nil {
+			if err := powerOffOrAlreadyOff(ctx, driver, vmUUID); err != nil {
 				err := fmt.Errorf("error stopping VM: %s", err)
 				state.Put("error", err)
 				ui.Error(err.Error())
@@ -59,15 +64,22 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			log.Printf("executing shutdown command: %s", s.Command)
 			cmd := &packersdk.RemoteCmd{Command: s.Command}
 			if err := cmd.RunWithUi(ctx, comm, ui); err != nil {
-				err := fmt.Errorf("failed to send shutdown command: %s", err)
-				state.Put("error", err)
-				ui.Error(err.Error())
-				return multistep.ActionHalt
+				if ctx.Err() != nil {
+					err := fmt.Errorf("failed to send shutdown command: %s", err)
+					state.Put("error", err)
+					ui.Error(err.Error())
+					return multistep.ActionHalt
+				}
+				// The communicator cannot tell a connection dropped by the
+				// shutdown from a command that never ran, so wait for the VM
+				// to stop and report this error if it does not.
+				commandErr = err
+				ui.Say(fmt.Sprintf("Shutdown command returned an error, waiting to see if the VM stops anyway: %s", err))
 			}
 
 		} else {
 			ui.Say("Halting the virtual machine...")
-			if err := driver.PowerOff(ctx, vmUUID); err != nil {
+			if err := powerOffOrAlreadyOff(ctx, driver, vmUUID); err != nil {
 				err := fmt.Errorf("error stopping VM: %s", err)
 				state.Put("error", err)
 				ui.Error(err.Error())
@@ -109,8 +121,11 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			return multistep.ActionHalt
 		case <-shutdownTimer:
 			err := errors.New("timeout while waiting for machine to shutdown")
+			if commandErr != nil {
+				err = fmt.Errorf("%w; the shutdown command failed: %w", err, commandErr)
+			}
 			if lastGetVMErr != nil {
-				err = fmt.Errorf("timeout while waiting for machine to shutdown; last error getting VM power state: %w", lastGetVMErr)
+				err = fmt.Errorf("%w; last error getting VM power state: %w", err, lastGetVMErr)
 			}
 			state.Put("error", err)
 			ui.Error(err.Error())
@@ -122,6 +137,20 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 	log.Println("VM shut down.")
 
 	return multistep.ActionContinue
+}
+
+// powerOffOrAlreadyOff powers the VM off. A PowerOff error is ignored only
+// when the VM is confirmed to be off already; otherwise it is returned.
+func powerOffOrAlreadyOff(ctx context.Context, driver Driver, vmUUID string) error {
+	err := driver.PowerOff(ctx, vmUUID)
+	if err == nil {
+		return nil
+	}
+	if vm, getErr := driver.GetVM(ctx, vmUUID); getErr == nil && vm.PowerState() == "OFF" {
+		log.Printf("PowerOff returned an error but the VM is already off: %s", err)
+		return nil
+	}
+	return err
 }
 
 func (s *StepShutdown) Cleanup(state multistep.StateBag) {}

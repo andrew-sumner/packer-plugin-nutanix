@@ -27,6 +27,94 @@ func (d *cancelledGetVMDriver) GetVM(ctx context.Context, vmUUID string) (*nutan
 	return nil, ctx.Err()
 }
 
+// powerDriver fakes PowerOff and GetVM for the shutdown step. The embedded
+// Driver is nil: any other method called by the test would panic.
+type powerDriver struct {
+	Driver
+	powerOffErr error
+	powerState  string
+}
+
+func (d *powerDriver) PowerOff(ctx context.Context, vmUUID string) error {
+	return d.powerOffErr
+}
+
+func (d *powerDriver) GetVM(ctx context.Context, vmUUID string) (*nutanixInstance, error) {
+	ps := vmmModels.POWERSTATE_ON
+	if d.powerState == "OFF" {
+		ps = vmmModels.POWERSTATE_OFF
+	}
+	return &nutanixInstance{vm: &vmmModels.Vm{PowerState: ps.Ref()}}, nil
+}
+
+// failingCommunicator fails to run any command, as the WinRM communicator
+// does when the connection drops mid-command.
+type failingCommunicator struct {
+	packer.MockCommunicator
+}
+
+func (c *failingCommunicator) Start(ctx context.Context, rc *packer.RemoteCmd) error {
+	return errors.New("connection reset by peer")
+}
+
+func shutdownState(d Driver, commType string) *multistep.BasicStateBag {
+	state := new(multistep.BasicStateBag)
+	state.Put("ui", &packer.BasicUi{Reader: new(bytes.Buffer), Writer: io.Discard, ErrorWriter: io.Discard})
+	state.Put("driver", d)
+	state.Put("communicator", new(failingCommunicator))
+	cfg := &Config{}
+	cfg.Comm.Type = commType
+	state.Put("config", cfg)
+	state.Put("vm_uuid", "vm-1")
+	return state
+}
+
+func TestStepShutdownResilience(t *testing.T) {
+	cases := []struct {
+		name       string
+		command    string
+		commType   string
+		driver     *powerDriver
+		cancel     bool
+		wantAction multistep.StepAction
+		wantErrMsg string
+	}{
+		{"command error, VM stops", "shutdown", "winrm", &powerDriver{powerState: "OFF"}, false, multistep.ActionContinue, ""},
+		{"command error, build cancelled", "shutdown", "winrm", &powerDriver{powerState: "ON"}, true, multistep.ActionHalt, "failed to send shutdown command"},
+		{"command error, VM never stops", "shutdown", "winrm", &powerDriver{powerState: "ON"}, false, multistep.ActionHalt, "the shutdown command failed: connection reset by peer"},
+		{"PowerOff error, VM already off", "", "winrm", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "OFF"}, false, multistep.ActionContinue, ""},
+		{"PowerOff error, VM still on", "", "winrm", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "ON"}, false, multistep.ActionHalt, "error stopping VM: task failed"},
+		{"no communicator, PowerOff error, VM already off", "", "none", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "OFF"}, false, multistep.ActionContinue, ""},
+		{"no communicator, PowerOff error, VM still on", "", "none", &powerDriver{powerOffErr: errors.New("task failed"), powerState: "ON"}, false, multistep.ActionHalt, "error stopping VM: task failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			state := shutdownState(tc.driver, tc.commType)
+			step := &StepShutdown{Command: tc.command, Timeout: 100 * time.Millisecond}
+
+			action := step.Run(ctx, state)
+			if action != tc.wantAction {
+				t.Errorf("action = %v, want %v", action, tc.wantAction)
+			}
+			rawErr, hasErr := state.GetOk("error")
+			if tc.wantErrMsg == "" {
+				if hasErr {
+					t.Errorf("unexpected error in state: %v", rawErr)
+				}
+				return
+			}
+			if !hasErr || !strings.Contains(rawErr.(error).Error(), tc.wantErrMsg) {
+				t.Errorf("error = %v, want it to contain %q", rawErr, tc.wantErrMsg)
+			}
+		})
+	}
+}
+
 // TestStepShutdownCancelledWhileWaiting checks that a cancelled build stops
 // waiting for shutdown promptly instead of dereferencing the nil VM GetVM
 // returns with its error.
