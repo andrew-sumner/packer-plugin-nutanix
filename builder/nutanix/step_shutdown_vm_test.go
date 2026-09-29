@@ -114,3 +114,38 @@ func TestStepShutdownTimeoutReportsGetVMError(t *testing.T) {
 		t.Errorf("error = %v, want it to include the GetVM error", rawErr)
 	}
 }
+
+// onceFailingGetVMDriver fails the first GetVM, then reports the VM as on.
+type onceFailingGetVMDriver struct {
+	Driver
+	calls int
+}
+
+func (d *onceFailingGetVMDriver) GetVM(ctx context.Context, vmUUID string) (*nutanixInstance, error) {
+	d.calls++
+	if d.calls == 1 {
+		return nil, errors.New("503 transient")
+	}
+	return &nutanixInstance{vm: &vmmModels.Vm{PowerState: vmmModels.POWERSTATE_ON.Ref()}}, nil
+}
+
+// An error from an earlier poll must not be reported as the cause of a timeout
+// once later polls succeed.
+func TestStepShutdownTimeoutIgnoresClearedGetVMError(t *testing.T) {
+	d := &onceFailingGetVMDriver{}
+	state := waitState(d)
+	step := &StepShutdown{Timeout: 50 * time.Millisecond, DisableStopInstance: true, pollInterval: 10 * time.Millisecond}
+	if action := step.Run(context.Background(), state); action != multistep.ActionHalt {
+		t.Errorf("action = %v, want ActionHalt", action)
+	}
+	rawErr, ok := state.GetOk("error")
+	if !ok {
+		t.Fatal("expected an error in state")
+	}
+	if msg := rawErr.(error).Error(); strings.Contains(msg, "503 transient") {
+		t.Errorf("timeout error reports a cleared GetVM error: %q", msg)
+	}
+	if d.calls < 2 {
+		t.Errorf("GetVM calls = %d, want at least 2", d.calls)
+	}
+}

@@ -85,16 +85,17 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 	if pollInterval == 0 {
 		pollInterval = defaultShutdownPollInterval
 	}
-	// lastGetVMErr is reported if the wait times out, so a persistent error
-	// (e.g. 401 or 404) is not hidden behind a bare timeout.
+	// lastGetVMErr holds the most recent poll's GetVM error, and is reported if
+	// the wait times out, so a persistent error (e.g. 401 or 404) is not hidden
+	// behind a bare timeout. A successful poll clears it.
 	var lastGetVMErr error
 	for {
 		// GetVM honours ctx, so it errors once the build is cancelled; a nil
 		// VM must not be dereferenced.
 		running, err := driver.GetVM(ctx, vmUUID)
+		lastGetVMErr = err
 		if err != nil {
 			log.Printf("error getting VM power state: %s", err)
-			lastGetVMErr = err
 		} else if running.PowerState() == "OFF" {
 			log.Printf("VM powered off")
 			break
