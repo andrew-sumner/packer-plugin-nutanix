@@ -17,10 +17,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-const (
-	ntnxAPIKeyHeaderKey = "X-ntnx-api-key"
-)
-
 type stepVNCConnect struct {
 	Config *Config
 }
@@ -74,29 +70,11 @@ func (s *stepVNCConnect) ConnectVNCOverWebsocketClient(ctx context.Context, stat
 		Scheme: "https",
 		Host:   fmt.Sprintf("%s:%d", s.Config.ClusterConfig.Endpoint, s.Config.ClusterConfig.Port),
 	}
-	header := http.Header{}
-	// Auth: prefer the explicit APIKey field; fall back to the legacy
-	// Username == "X-ntnx-api-key" form; otherwise Basic Auth. IAM-enabled PCs
-	// require auth on the console upgrade request.
-	switch {
-	case s.Config.ClusterConfig.APIKey != "":
-		header.Set(ntnxAPIKeyHeaderKey, s.Config.ClusterConfig.APIKey)
-	case s.Config.ClusterConfig.Username == "X-ntnx-api-key":
-		header.Set(ntnxAPIKeyHeaderKey, s.Config.ClusterConfig.Password)
-	default:
-		header.Set("Authorization", "Basic "+basicAuth(s.Config.ClusterConfig.Username, s.Config.ClusterConfig.Password))
-	}
-	// Custom headers (e.g. Cloudflare Access service tokens) — same set the
-	// HTTP API path uses; without these, the WSS upgrade is rejected by any
-	// service-token gateway in front of Prism Central.
-	for k, v := range s.Config.ClusterConfig.CustomHeaders {
-		header.Set(k, v)
-	}
 	wsConfig := websocket.Config{
 		Location: u,
 		Origin:   originURL,
 		Version:  websocket.ProtocolVersionHybi13,
-		Header:   header,
+		Header:   s.consoleHeaders(),
 		TlsConfig: &tls.Config{
 			InsecureSkipVerify: s.Config.ClusterConfig.Insecure,
 		},
@@ -124,6 +102,29 @@ func (s *stepVNCConnect) ConnectVNCOverWebsocketClient(ctx context.Context, stat
 	return c, nil
 }
 
+// consoleHeaders returns the auth and custom headers for the console
+// websocket upgrade. Auth prefers the explicit APIKey field, then the legacy
+// Username == "X-ntnx-api-key" form, otherwise Basic Auth; IAM-enabled PCs
+// require auth on the upgrade request. Custom headers (e.g. Cloudflare Access
+// service tokens) are the same set the HTTP API path uses; without them, a
+// service-token gateway in front of Prism Central rejects the upgrade.
+func (s *stepVNCConnect) consoleHeaders() http.Header {
+	cc := s.Config.ClusterConfig
+	header := http.Header{}
+	switch {
+	case cc.APIKey != "":
+		header.Set(ntnxAPIKeyHeaderName, cc.APIKey)
+	case cc.Username == ntnxAPIKeyHeaderName:
+		header.Set(ntnxAPIKeyHeaderName, cc.Password)
+	default:
+		header.Set("Authorization", "Basic "+basicAuth(cc.Username, cc.Password))
+	}
+	for k, v := range cc.CustomHeaders {
+		header.Set(k, v)
+	}
+	return header
+}
+
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
@@ -141,6 +142,9 @@ func (s *stepVNCConnect) probeWebsocketHandshake(wsURL, origin string) (string, 
 	if err != nil {
 		return "", err
 	}
+	// Send the same auth and custom headers as the real handshake, so the
+	// probe shows Prism Central's response rather than a gateway's.
+	req.Header = s.consoleHeaders()
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Origin", origin)
