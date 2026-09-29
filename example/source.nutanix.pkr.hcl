@@ -7,7 +7,7 @@ source "nutanix" "centos" {
   nutanix_port           = var.nutanix_port
   nutanix_insecure       = var.nutanix_insecure
   cluster_name           = var.nutanix_cluster
-  os_type          = "Linux"
+  os_type                = "Linux"
 
   vm_disks {
       image_type = "DISK_IMAGE"
@@ -54,8 +54,11 @@ source "nutanix" "ubuntu" {
   nutanix_endpoint       = var.nutanix_endpoint
   nutanix_port           = var.nutanix_port
   nutanix_insecure       = var.nutanix_insecure
+
+  # read_timeout_minutes = 30
+
   cluster_name           = var.nutanix_cluster
-  os_type          = "Linux"
+  os_type                = "Linux"
 
   vm_disks {
     image_type = "DISK_IMAGE"
@@ -87,7 +90,7 @@ source "nutanix" "centos-kickstart" {
   nutanix_port           = var.nutanix_port
   nutanix_insecure       = var.nutanix_insecure
   cluster_name           = var.nutanix_cluster
-  os_type          = "Linux"
+  os_type                = "Linux"
 
 
   vm_disks {
@@ -125,7 +128,7 @@ source "nutanix" "ubuntu-autoinstall" {
   nutanix_port           = var.nutanix_port
   nutanix_insecure       = var.nutanix_insecure
   cluster_name           = var.nutanix_cluster
-  os_type          = "Linux"
+  os_type                = "Linux"
 
 
   vm_disks {
