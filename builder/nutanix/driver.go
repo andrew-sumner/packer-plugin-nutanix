@@ -890,10 +890,12 @@ func (d *NutanixDriver) WaitForIP(ctx context.Context, vmUUID string, ipNet *net
 
 	for {
 		// Bail out immediately if the wait was cancelled (ip_wait_timeout fired,
-		// or the build was interrupted). Don't rely on VMs.Get to observe the
-		// cancellation (prism-go-client before v0.8 ignores the context);
-		// without this check the caller's `<-waitDone` would block until an IP
-		// is found, potentially forever for a VM that never gets one.
+		// or the build was interrupted). Don't assume VMs.Get observes the
+		// cancellation: prism-go-client only passes the context through from
+		// v0.8.2. This check and the context-aware backoff below together end
+		// the loop; without a context check here, the caller's `<-waitDone`
+		// would block until an IP is found, potentially forever for a VM that
+		// never gets one.
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
