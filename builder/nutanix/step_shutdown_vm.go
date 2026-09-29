@@ -28,7 +28,13 @@ type StepShutdown struct {
 	Command             string
 	Timeout             time.Duration
 	DisableStopInstance bool
+
+	// pollInterval is how often the VM's power state is checked; zero means
+	// defaultShutdownPollInterval. Set by tests.
+	pollInterval time.Duration
 }
+
+const defaultShutdownPollInterval = 15 * time.Second
 
 func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multistep.StepAction {
 	comm := state.Get("communicator").(packersdk.Communicator)
@@ -75,12 +81,20 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 	// Wait for the machine to actually shut down
 	log.Printf("waiting max %s for shutdown to complete", s.Timeout)
 	shutdownTimer := time.After(s.Timeout)
+	pollInterval := s.pollInterval
+	if pollInterval == 0 {
+		pollInterval = defaultShutdownPollInterval
+	}
+	// lastGetVMErr is reported if the wait times out, so a persistent error
+	// (e.g. 401 or 404) is not hidden behind a bare timeout.
+	var lastGetVMErr error
 	for {
 		// GetVM honours ctx, so it errors once the build is cancelled; a nil
 		// VM must not be dereferenced.
 		running, err := driver.GetVM(ctx, vmUUID)
 		if err != nil {
 			log.Printf("error getting VM power state: %s", err)
+			lastGetVMErr = err
 		} else if running.PowerState() == "OFF" {
 			log.Printf("VM powered off")
 			break
@@ -94,10 +108,13 @@ func (s *StepShutdown) Run(ctx context.Context, state multistep.StateBag) multis
 			return multistep.ActionHalt
 		case <-shutdownTimer:
 			err := errors.New("timeout while waiting for machine to shutdown")
+			if lastGetVMErr != nil {
+				err = fmt.Errorf("timeout while waiting for machine to shutdown; last error getting VM power state: %w", lastGetVMErr)
+			}
 			state.Put("error", err)
 			ui.Error(err.Error())
 			return multistep.ActionHalt
-		case <-time.After(15 * time.Second):
+		case <-time.After(pollInterval):
 		}
 	}
 

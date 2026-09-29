@@ -18,7 +18,7 @@ func TestStepCreateImageRunGetVMError(t *testing.T) {
 
 	state := new(multistep.BasicStateBag)
 	state.Put("ui", &packer.BasicUi{Reader: new(bytes.Buffer), Writer: io.Discard, ErrorWriter: io.Discard})
-	state.Put("driver", &shutdownDriver{})
+	state.Put("driver", &cancelledGetVMDriver{})
 	state.Put("vm_uuid", "vm-1")
 
 	step := &stepCreateImage{Config: &Config{}}
