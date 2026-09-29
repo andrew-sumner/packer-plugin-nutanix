@@ -329,6 +329,10 @@ func (c *Config) Prepare(raws ...interface{}) ([]string, error) {
 		errs = packersdk.MultiErrorAppend(errs,
 			fmt.Errorf("windows_install_type must be FRESH or PREPARED, got %q", c.VmConfig.WindowsInstallType))
 	}
+	// The install type is only sent with Windows Sysprep guest customization.
+	if c.VmConfig.WindowsInstallType != "" && (c.VmConfig.OSType != "Windows" || c.VmConfig.UserData == "") {
+		warnings = append(warnings, `windows_install_type has no effect unless os_type is "Windows" and user_data is set`)
+	}
 
 	if c.VmConfig.VMName == "" {
 		p := fmt.Sprintf("Packer-%s", random.String(random.PossibleAlphaNumUpper, 8))
