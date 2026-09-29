@@ -4,11 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/multistep"
 	"github.com/hashicorp/packer-plugin-sdk/packer"
 	vmmModels "github.com/nutanix/ntnx-api-golang-clients/vmm-go-client/v4/models/vmm/v4/ahv/config"
 )
+
+// cleanupTimeout bounds each step cleanup operation. Cleanup is detached from
+// build cancellation so its delete requests are still sent after a cancel, so
+// without this a stuck delete task would block packer from exiting.
+const cleanupTimeout = 10 * time.Minute
+
+// withCleanupTimeout runs one cleanup operation under its own cleanupTimeout,
+// so a slow operation cannot use up the budget of the ones after it.
+func withCleanupTimeout(ctx context.Context, op func(context.Context) error) error {
+	opCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
+	return op(opCtx)
+}
 
 type imageArtefact struct {
 	uuid string
@@ -107,6 +121,9 @@ func (s *stepCreateImage) Cleanup(state multistep.StateBag) {
 	if !ok {
 		ctx = context.Background()
 	}
+	// Cleanup also runs after the build is cancelled; detach from that
+	// cancellation so the delete request is still sent.
+	ctx = context.WithoutCancel(ctx)
 
 	if !s.Config.ImageDelete {
 		return
@@ -117,7 +134,9 @@ func (s *stepCreateImage) Cleanup(state multistep.StateBag) {
 
 		for _, image := range imgUUID.([]imageArtefact) {
 
-			err := d.DeleteImage(ctx, image.uuid)
+			err := withCleanupTimeout(ctx, func(ctx context.Context) error {
+				return d.DeleteImage(ctx, image.uuid)
+			})
 			if err != nil {
 				ui.Error("An error occurred while deleting image")
 				return
