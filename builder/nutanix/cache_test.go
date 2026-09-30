@@ -56,9 +56,10 @@ func TestV4CacheParamsManagementEndpointObjectsUpload(t *testing.T) {
 		objectsUpload: true,
 	}
 	ep := p.ManagementEndpoint()
-	// The Objects Lite upload signs its S3 requests with username/password.
-	if ep.APIKey != "key123" || ep.Username != "admin" || ep.Password != "secret" {
-		t.Errorf("expected api key and basic credentials for upload client, got %+v", ep.ApiCredentials)
+	// The Objects Lite upload signs its S3 requests with username/password, and
+	// the image create after it runs on the same client, so it uses those alone.
+	if ep.APIKey != "" || ep.Username != "admin" || ep.Password != "secret" {
+		t.Errorf("expected basic credentials only for upload client, got %+v", ep.ApiCredentials)
 	}
 	mainParams := *p
 	mainParams.objectsUpload = false
@@ -107,7 +108,7 @@ func TestV4TransferClientKeepsReadTimeout(t *testing.T) {
 
 // TestV4ClientAuthHeadersOnWire checks what actually reaches Prism Central:
 // with an API key set, the main client must send the key and no Basic auth,
-// while the upload client also carries Basic for the Objects Lite upload.
+// while the upload client sends Basic only, for the Objects Lite upload.
 func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 	var mu sync.Mutex
 	var seen []http.Header
@@ -190,6 +191,9 @@ func TestV4ClientAuthHeadersOnWire(t *testing.T) {
 	for _, h := range request(t, d.getV4UploadClient, listImages) {
 		if strings.HasPrefix(h.Get("Authorization"), "Basic ") {
 			sawBasic = true
+		}
+		if k := h.Get("X-ntnx-api-key"); k != "" {
+			t.Errorf("upload client: expected Basic auth only, also got X-ntnx-api-key %q", k)
 		}
 		if got := h.Get("Cf-Access-Client-Id"); got != "wire-test-client" {
 			t.Errorf("upload client: expected custom header, got %q", got)

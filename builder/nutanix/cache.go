@@ -30,8 +30,8 @@ type v4CacheParams struct {
 	// its own cache entry because a cache hit ignores client options, so a
 	// shared entry would keep whichever timeout was created first.
 	transfer bool
-	// objectsUpload keeps username/password on the client alongside an API
-	// key, for the Objects Lite image upload only. See ManagementEndpoint.
+	// objectsUpload makes a username/password client even when an API key is
+	// set, for the Objects Lite image upload only. See ManagementEndpoint.
 	objectsUpload bool
 }
 
@@ -71,9 +71,10 @@ func (p *v4CacheParams) Key() string {
 // requests carry the X-ntnx-api-key header and no Basic auth.
 //
 // The exception is objectsUpload: the Objects Lite image upload signs its S3
-// requests with the username/password held on the client, so those are kept
-// alongside the key. The vmm SDK then also sends Basic auth on that client's
-// requests, which is why it is a separate cache entry used only for uploads.
+// requests with the username/password held on the client, and the image create
+// that follows runs on the same client. That client therefore uses
+// username/password only, as a build without an API key does, rather than
+// sending both identities. It is a separate cache entry used only for uploads.
 func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 	u := &url.URL{
 		Scheme: "https",
@@ -83,12 +84,8 @@ func (p *v4CacheParams) ManagementEndpoint() types.ManagementEndpoint {
 		Username: p.username,
 		Password: p.password,
 	}
-	if p.apiKey != "" {
+	if p.apiKey != "" && !p.objectsUpload {
 		creds = types.ApiCredentials{APIKey: p.apiKey}
-		if p.objectsUpload {
-			creds.Username = p.username
-			creds.Password = p.password
-		}
 	}
 	return types.ManagementEndpoint{
 		ApiCredentials: creds,

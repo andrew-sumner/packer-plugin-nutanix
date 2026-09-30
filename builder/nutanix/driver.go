@@ -228,10 +228,10 @@ func (d *NutanixDriver) getV4TransferClient() (*convergedv4.Client, error) {
 }
 
 // getV4UploadClient returns a V4 transfer client for Objects Lite image
-// uploads. Unlike getV4TransferClient it keeps username/password on the
-// client even when an API key is configured, because the upload signs its S3
-// requests with them. Use it for uploads only: the vmm SDK also sends Basic
-// auth on every request from a client that holds a username/password.
+// uploads. Unlike getV4TransferClient it authenticates with username/password
+// instead of the API key, as a build without an API key does, because the
+// upload signs its S3 requests with them. Use it for uploads only; every other
+// client uses the API key when one is configured.
 func (d *NutanixDriver) getV4UploadClient() (*convergedv4.Client, error) {
 	return d.newV4TransferClient(true)
 }
